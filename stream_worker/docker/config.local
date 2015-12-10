@@ -1,0 +1,18 @@
+[main]
+#environment = development
+environment = production
+
+[server]
+meta = zk://zookeeper:2181/ddinsignt
+broker = amqp://demo:demo@rabbitmq/ddinsight
+task_module = mongodb://mongodb/task_storage
+
+[db]
+myapmain = mysql://demo:demo@mysql/demo
+myapwave = mysql://demo:demo@mysql/demo
+
+[log]
+name = stream_worker
+file = log/stream_worker.log
+# DEBUG, INFO, WARN, ERROR, FATAL (or CRITICAL)
+level = DEBUG

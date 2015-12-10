@@ -1,0 +1,14 @@
+[main]
+#environment = development
+environment = production
+
+[server]
+meta = zk://localhost/ddinsight
+broker = amqp://localhost/ddinsignt
+task_module = mongodb://localhost/task_storage
+
+[log]
+name = worker
+file = log/worker.log
+# DEBUG, INFO, WARN, ERROR, FATAL (or CRITICAL)
+level = ERROR

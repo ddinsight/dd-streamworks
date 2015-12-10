@@ -1,0 +1,17 @@
+[main]
+bind = 0.0.0.0
+port = 7010
+environment = production
+pid-file = /tmp/henem.pid
+
+[source]
+mgqueue = mongodb://localhost/apqueue
+
+[server]
+meta = zk://localhost:2181/ddinsight
+broker = amqp://localhost/ddinsight
+
+[log]
+name = Henem
+level = INFO
+file = log/henem.log

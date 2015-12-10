@@ -1,0 +1,673 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+#
+#  Copyright 2015 AirPlug Inc.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+#
+
+
+import os
+import sys
+import time
+from urlparse import urlparse
+import argparse
+import pymongo
+import gridfs
+from kazoo.client import KazooClient
+import json
+import tarfile
+import importlib
+import tempfile
+import hashlib
+import traceback
+
+import __builtin__
+from types import ModuleType
+
+
+
+ZK_OCEANWORKER = 'oceanworker'
+ZK_MODULE = ZK_OCEANWORKER + '/module'
+ZK_TASK = ZK_OCEANWORKER + '/tasks'
+ZK_EVENT = ZK_OCEANWORKER + '/event'
+ZK_CONFIG = ZK_OCEANWORKER + '/config'
+
+if 'OW_TASKMODULE' in os.environ:
+    TASKMODULE_URL = os.environ['OW_TASKMODULE']
+else:
+    raise EnvironmentError("Cannot find task storage url")
+
+if 'OW_ZOOKEEPER' in os.environ:
+    ZK_URL = os.environ['OW_ZOOKEEPER']
+else:
+    raise EnvironmentError("Cannot find zookeeper url")
+
+template = """# -*- coding: utf-8 -*-
+
+class MyJob(object):
+    # static class variable
+    OW_TASK_SUBSCRIBE_EVENTS = ['MyEvent']
+    OW_TASK_PUBLISH_EVENTS = []
+    OW_USE_HASHING = False
+    OW_HASH_KEY = None
+
+    def handler(self, params):
+        print params
+
+    def publishEvent(self, event, params):
+        # THIS METHOD WILL BE OVERRIDE
+        # DO NOT EDIT THIS METHOD
+        pass
+"""
+
+listExcludeFiles = ('pyc', 'pyo')
+realimport = __builtin__.__import__
+
+
+class DummyModule(ModuleType):
+    __all__ = []   # support wildcard imports
+
+    def __getattr__(self, key):
+        if key.startswith('OW_'):
+            raise AttributeError()
+
+        return None
+
+
+def tryimport(name, globals={}, locals={}, fromlist=[], level=-1):
+    try:
+        return realimport(name, globals, locals, fromlist, level)
+    except ImportError, e:
+        # ignore import error
+        return DummyModule(name)
+
+
+def isExclude(tarinfo):
+    if tarinfo.name.endswith(listExcludeFiles):
+        print "compiled file"
+        return None
+    if tarinfo.type in [tarfile.LNKTYPE, tarfile.SYMTYPE]:
+        print "Link Type"
+        return None
+
+    return tarinfo
+
+
+class StorageHandler(object):
+    """
+    Mongo gridFs handler.
+    upload/download module to mongodb
+    """
+
+    def __init__(self, url):
+        self.url = url
+        self.client = pymongo.MongoClient(url)
+        self.db = self.client.get_default_database()
+        self.fs = gridfs.GridFS(self.db)
+
+    def __del__(self):
+        self.client.close()
+        print "Close Mongo DB"
+
+    def getList(self):
+        files = self.fs.list()
+        return files
+
+    def getInfo(self, filename):
+        for file in self.fs.find({'filename': filename}):
+            return dict(filename=file.filename, size=file.length, contentType=file.content_type, upload=file.upload_date, md5=file.md5, extra=file.metadata)
+
+    def put(self, name, path, meta=dict()):
+        """
+        upload module directory.
+        compress bz2 format and add .awm(AirCloud Worker Module) file extension.
+
+        :param name: module name
+        :param path: path name (file or directory)
+        :param meta: meta info.
+        :raise RuntimeError: file what path indicates is not tar file.
+        """
+        if not os.path.exists(path):
+            raise ValueError('%s not exists' % path)
+
+        tmpPath = None
+        filename = '%s.awm' % name
+
+        if os.path.isfile(path):
+            if not tarfile.is_tarfile(path):
+                raise TypeError("%s - is not tar file" % path)
+
+            filepath = path
+        elif os.path.isdir(path):
+            tmpPath = tempfile.mkdtemp()
+            filepath = '%s/%s' % (tmpPath, filename)
+
+            tar = tarfile.open(filepath, "w:bz2")
+            tar.add(path, arcname=name, filter=isExclude)
+            tar.close()
+        else:
+            raise TypeError('module %s - %s is not file or directory' % (name, path))
+
+        print filepath
+
+        meta['filename'] = filename
+        meta['module'] = name
+        meta['contentType'] = 'bzip2'
+
+        with open(filepath, 'rb') as fd:
+            if not self.fs.exists(filename=filename):
+                print "Upload !"
+                fileId = self.fs.put(fd, **meta)
+            else:
+                md5 = hashlib.md5(fd.read()).hexdigest()
+                fd.seek(0, 0)
+                ret = self.fs.get_last_version(filename=filename)
+
+                if md5 != ret.md5:
+                    print "Upload !", md5, ret.md5
+                    fileId = self.fs.put(fd, **meta)
+                else:
+                    print "Same file!"
+                    fileId = ret._id
+
+        if tmpPath:
+            os.remove(filepath)
+            os.removedirs(tmpPath)
+
+        return str(fileId)
+
+    def get(self, name, version=-1, path=None, extract=False):
+        """
+        download module.
+        decompress bz2 format if extract is True.
+
+        :param name: module name
+        :param version: gridFs assigned version code for module (-1 means last file)
+        :param path: download path
+        :param extract: decompress module or not
+        :raise RuntimeError: file what path indicates is not tar file.
+        """
+        filename = '%s.awm' % name
+        ret = self.fs.get_version(filename=filename, version=version)
+        if not path:
+            path = os.getcwd()
+
+        filepath = os.path.join(path, filename)
+
+        with open(filepath, 'wb') as fd:
+            fd.write(ret.readchunk())
+
+        if extract:
+            tar = tarfile.open(filepath, 'r:bz2')
+            tar.extractall(path=path)
+            tar.close()
+            os.remove(filepath)
+
+    def remove(self, name, version=None):
+        print "DEL", name, version
+        filename = '%s.awm' % name
+        if version is not None:
+            file = self.fs.get_version(filename=filename, version=version)
+            print "Delete %s, %s (%s bytes)" % (file.filename, file.upload_date, file.chunk_size)
+            self.fs.delete(file._id)
+        else:
+            # delete all version
+            for file in self.fs.find({'filename': filename}):
+                print "Delete %s, %s (%s bytes)" % (file.filename, file.upload_date, file.chunk_size)
+                self.fs.delete(file._id)
+
+
+class OWMetaHandler(object):
+    def __init__(self):
+        self.zkClient = None
+        self.storage = None
+
+    def __del__(self):
+        if self.zkClient:
+            self.zkClient.stop()
+            self.zkClient.close()
+
+        if self.storage:
+            del self.storage
+
+    def __getZooKeeperHandler(self):
+        if not self.zkClient:
+            parsed = urlparse(ZK_URL)
+            if parsed.scheme != 'zk':
+                raise ValueError("Meta URL must start with zk://")
+
+            if parsed.path in ('/', ''):
+                raise ValueError("Service root path not found.")
+
+            self.rootpath = parsed.path.rstrip('/')
+
+            # NOTE: currently, auth_data is not supported
+            servers = parsed.netloc.split('@')[-1]
+            self.zkClient = KazooClient(hosts=servers)
+            self.zkClient.start()
+
+        return self.zkClient
+
+    def __getStorageHandler(self):
+        if not self.storage:
+            self.storage = StorageHandler(TASKMODULE_URL)
+
+        return self.storage
+
+    def __updateModuleEvent(self, event, module):
+        zkClient = self.__getZooKeeperHandler()
+        zkClient.set(os.path.join(self.rootpath, ZK_MODULE), json.dumps({'event': event, 'name': module, 'timestamp': time.time()}))
+
+    def __updateTaskEvent(self, event, tasks):
+        zkClient = self.__getZooKeeperHandler()
+        zkClient.set(os.path.join(self.rootpath, ZK_TASK), json.dumps({'event': event, 'tasks': tasks, 'timestamp': time.time()}))
+
+    def getServiceConfig(self, args):
+        if args.service == '':
+            print "unknown service name - %s" % args.service
+            return
+
+        zkClient = self.__getZooKeeperHandler()
+        servicePath = os.path.join(self.rootpath, args.service, 'config')
+        if not zkClient.exists(servicePath):
+            print "Cannot find service configuration for '%s'" % args.service
+            return
+
+        try:
+            config = json.loads(zkClient.get(servicePath)[0])
+        except Exception, e:
+            print "Configuration is not JSON format."
+            return
+
+        args.configfile.writelines(json.dumps(config, indent=4))
+
+        return
+
+    def setServiceConfig(self, args):
+        if args.service == '':
+            print "unknown service name - %s" % args.service
+            return
+
+        zkClient = self.__getZooKeeperHandler()
+        servicePath = os.path.join(self.rootpath, args.service, 'config')
+        if not zkClient.exists(servicePath):
+            print "Cannot find service configuration for '%s'" % args.service
+            return
+
+        data = ''
+        for line in args.configfile.readlines():
+            data += line
+
+        try:
+            config = json.loads(data)
+        except Exception, e:
+            print "Config parse error - %s" % e
+            return
+
+        zkClient.set(servicePath, json.dumps(config))
+
+    def getModuleList(self, args):
+
+        handler = self.__getStorageHandler()
+        zkClient = self.__getZooKeeperHandler()
+
+        moduleList = handler.getList()
+
+        if len(args.name) == 0:
+            print '=' * 60
+            print "Module lists..."
+            print '=' * 60
+            for name in moduleList:
+                module = name.rstrip('.awm')
+                print "%-15s[filename: %s]" % (module, name)
+        else:
+            if 'all' not in args.name:
+                targets = map(lambda x: '%s.awm' % x, args.name)
+                moduleList = set(targets).intersection(moduleList)
+
+            for name in moduleList:
+                module = name.rstrip('.awm')
+
+                modulePath = os.path.join(self.rootpath, ZK_MODULE, module)
+                fileInfo = handler.getInfo(name)
+                exists = zkClient.exists(modulePath)
+                print '=' * 70
+                print "Module: %-15s [filename: %s, status: %s]" % (module, name, 'valid' if exists else 'invalid')
+                print '=' * 70
+
+                if exists:
+                    metaInfo = json.loads(zkClient.get(modulePath)[0])
+                    for task in metaInfo['tasks']:
+                        taskPath = os.path.join(self.rootpath, ZK_TASK, task)
+                        taskInfo = json.loads(zkClient.get(taskPath)[0])
+                        #print taskInfo
+                        print "%-30s max worker: %d, subscribe: %s, publish: %s, use hashing: %s" % (task, taskInfo['maxWorker'], ', '.join(taskInfo['subscribeEvents']), ', '.join(taskInfo['publishEvents']) if len(taskInfo['publishEvents']) > 0 else None, taskInfo['useHashing'])
+                print "\n"
+
+        print "\n%s module(s) found." % len(moduleList)
+
+    def createTemplate(self, args):
+        name = args.name
+        modulePath = args.target + '/%s' % name
+        bCreatePath = args.force
+        if os.path.isdir(modulePath):
+            raise ValueError("Already exists module - %s (%s)" % (name, modulePath))
+
+        try:
+            if bCreatePath:
+                os.makedirs(modulePath)
+            else:
+                os.mkdir(modulePath)
+            fd = open(modulePath + '/__init__.py', 'w')
+            fd.write(template)
+            fd.close()
+        except OSError, e:
+            if e.errno == 2:
+                print "Cannot create path, use '--force' option"
+        except Exception, e:
+            print "module create error - %s" % e
+
+    def removeModule(self, args):
+        name = args.name
+
+        zkClient = self.__getZooKeeperHandler()
+
+        modulePath = os.path.join(self.rootpath, ZK_MODULE, name)
+
+        if not zkClient.exists(modulePath):
+            raise ValueError('Unknown module - %s' % name)
+
+        module = json.loads(zkClient.get(modulePath)[0])
+        for task in module.get('tasks', []):
+            taskPath = os.path.join(self.rootpath, ZK_TASK, task)
+
+            try:
+                if zkClient.exists(taskPath):
+                    zkClient.delete(taskPath, recursive=True)
+            except Exception, e:
+                print e
+        self.__updateTaskEvent('remove', module.get('tasks', []))
+
+        zkClient.delete(modulePath)
+        self.__updateModuleEvent('remove', name)
+
+        handler = self.__getStorageHandler()
+        handler.remove(name)
+
+    def uploadModule(self, args):
+        taskList = {}
+        name = args.name
+        numWorker = args.worker
+        modulePath = os.path.join(args.target, name)
+        sys.path.append(args.target)
+
+        if not os.path.exists(modulePath) or not os.path.exists(os.path.join(modulePath, '__init__.py')):
+            raise RuntimeError("Cannot find module path for %s - %s" % (name, modulePath))
+
+        moduleVersion = ''
+        try:
+            with open(os.path.join(modulePath, '__init__.py')) as f:
+                for line in f.readlines():
+                    if line.find('__version__') < 0:
+                        continue
+                    moduleVersion = line.split('=')[-1].strip()
+        except Exception, e:
+            raise e
+
+        # hooking ImportError
+        __builtin__.__import__ = tryimport
+
+        try:
+            mod = importlib.import_module(name)
+        except Exception, e:
+            print traceback.print_exc()
+            raise e
+
+        for attr in dir(mod):
+            obj = getattr(mod, attr)
+            if hasattr(obj, 'OW_TASK_SUBSCRIBE_EVENTS'):
+                if attr in taskList:
+                    raise RuntimeError("Duplicated Task name - %s in %s" % (attr, name))
+
+                task = {'module': name,
+                        'useHashing': obj.OW_USE_HASHING,
+                        'hashKey': obj.OW_HASH_KEY,
+                        'subscribeEvents': obj.OW_TASK_SUBSCRIBE_EVENTS,
+                        'publishEvents': obj.OW_TASK_PUBLISH_EVENTS}
+
+                if numWorker >= 0:
+                    task['maxWorker'] = numWorker
+                elif hasattr(obj, 'OW_NUM_WORKER'):
+                    task['maxWorker'] = obj.OW_NUM_WORKER
+                else:
+                    task['maxWorker'] = 0
+
+                taskList[attr] = task
+
+        # restore base import
+        __builtin__.__import__ = realimport
+
+        print "Tasks", taskList.keys()
+
+        handler = self.__getStorageHandler()
+        zkClient = self.__getZooKeeperHandler()
+
+        fileId = handler.put(name, modulePath, {'version': moduleVersion})
+
+        zkData = {}
+        zkData['filename'] = '%s.awm' % name
+        zkData['version'] = moduleVersion
+        zkData['module'] = name
+        zkData['tasks'] = taskList.keys()
+        zkData['fileid'] = fileId
+        zkData['ts'] = time.time()
+
+        if not zkClient.exists(os.path.join(self.rootpath, ZK_TASK)):
+            zkClient.ensure_path(os.path.join(self.rootpath, ZK_TASK))
+
+        updateTasks = []
+
+        for task, attr in taskList.iteritems():
+            taskPath = os.path.join(self.rootpath, ZK_TASK, task)
+
+            if not zkClient.exists(taskPath):
+                updateTasks.append(task)
+                zkClient.create(taskPath, json.dumps(attr), ephemeral=False)
+            else:
+                ret = zkClient.get(taskPath)
+                prevInfo = json.loads(ret[0])
+                print prevInfo['maxWorker'] != numWorker
+                if prevInfo['module'] == None:
+                    # ephemeral node.
+                    zkClient.delete(taskPath)
+                elif (numWorker >= 0 and (prevInfo['maxWorker'] != numWorker)) or (prevInfo['module'] != attr['module']) or (
+                    attr['useHashing'] != prevInfo['useHashing']) or (prevInfo['hashKey'] != attr['hashKey']) or (
+                    prevInfo['subscribeEvents'] != attr['subscribeEvents']) or (prevInfo['publishEvents'] != attr['publishEvents']):
+                    prevInfo['module'] = attr['module']
+                    prevInfo['useHashing'] = attr['useHashing']
+                    prevInfo['hashKey'] = attr['hashKey']
+                    prevInfo['subscribeEvents'] = attr['subscribeEvents']
+                    prevInfo['publishEvents'] = attr['publishEvents']
+                    if attr['maxWorker'] >= 0:
+                        prevInfo['maxWorker'] = attr['maxWorker']
+
+                updateTasks.append(task)
+                zkClient.set(taskPath, json.dumps(prevInfo))
+
+        if len(updateTasks) > 0:
+            self.__addEventQueue('evtTaskConfUpdate', {'tasks': updateTasks})
+            self.__updateTaskEvent('update', updateTasks)
+
+        # update module
+        if not zkClient.exists(os.path.join(self.rootpath, ZK_MODULE)):
+            zkClient.ensure_path(os.path.join(self.rootpath, ZK_MODULE))
+
+        if not zkClient.exists(os.path.join(self.rootpath, ZK_MODULE, name)):
+            zkClient.create(os.path.join(self.rootpath, ZK_MODULE, name), json.dumps(zkData), ephemeral=False)
+            self.__updateModuleEvent('create', name)
+        else:
+            ret = zkClient.get(os.path.join(self.rootpath, ZK_MODULE, name))
+            taskInfo = json.loads(ret[0])
+            if taskInfo['fileid'] != fileId:
+                zkClient.set(os.path.join(self.rootpath, ZK_MODULE, name), json.dumps(zkData))
+                self.__updateModuleEvent('update', name)
+
+    def downloadModule(self, args):
+        name = args.name
+        downloadPath = args.target
+        bExtract = args.extract
+
+        if args.force and not os.path.exists(args.target):
+            os.makedirs(args.target, mode=0755)
+
+        if not os.path.exists(args.target):
+            print "Cannot find download path : %s, please use '--force' option" % downloadPath
+            return
+
+        handler = self.__getStorageHandler()
+        handler.get(name, path=args.target, extract=bExtract)
+
+    def updateTaskConfig(self, args):
+        """
+        1. update task info
+        2. add event to queue
+        """
+        task = args.name
+        numWorker = args.worker
+
+        zkClient = self.__getZooKeeperHandler()
+
+        taskPath = os.path.join(self.rootpath, ZK_TASK, task)
+        if not zkClient.exists(taskPath):
+            raise ValueError('Unknown task - %s' % task)
+
+        taskInfo = json.loads(zkClient.get(taskPath)[0])
+        if taskInfo['maxWorker'] != numWorker:
+            taskInfo['maxWorker'] = numWorker
+            zkClient.set(taskPath, json.dumps(taskInfo))
+
+        self.__addEventQueue('evtTaskConfUpdate', {'tasks': [task]})
+
+    def rebalanceTask(self, args):
+        """
+        1. update task info
+        2. add event to queue
+        """
+        tasks = set(args.tasks[:])
+
+        zkClient = self.__getZooKeeperHandler()
+
+        if 'all' in tasks:
+            tasks = ['all']
+        else:
+            for task in args.tasks:
+                if not zkClient.exists(os.path.join(self.rootpath, ZK_TASK, task)):
+                    tasks.remove(task)
+                    print "Task : %s not exists" % task
+
+        if len(tasks):
+            self.__addEventQueue('evtRebalance', {'tasks': list(tasks)})
+
+
+    def __addEventQueue(self, event, params={}):
+        eventInfo = params.copy()
+        eventInfo.update({'event': event})
+        print eventInfo
+        queue = self.zkClient.Queue(os.path.join(self.rootpath, ZK_EVENT, 'queue'))
+
+        queue.put(json.dumps(eventInfo))
+        self.zkClient.set(os.path.join(self.rootpath, ZK_EVENT), json.dumps({'update': time.time()}))
+
+
+class OWCommandLineInterface(object):
+    def __init__(self):
+        self.handler = OWMetaHandler()
+        self.parser = argparse.ArgumentParser(description="Oceanworker command line interface.",
+                                              usage="%(prog)s command [options]",
+                                              epilog="Airplug.")
+
+        subparser = self.parser.add_subparsers(help="available sub-commands")
+
+        # Get module list
+        subcommand = subparser.add_parser('setconfig', help='set service config')
+        subcommand.add_argument('service', type=str, action='store', default='', help="service name")
+        subcommand.add_argument('configfile', metavar='infile', nargs='?', type=argparse.FileType('r'), default=sys.stdin, help="config file to read (default : stdin)")
+        subcommand.set_defaults(func=self.handler.setServiceConfig)
+
+        # Get module list
+        subcommand = subparser.add_parser('getconfig', help='get service config')
+        subcommand.add_argument('service', type=str, action='store', default='', help="service name")
+        subcommand.add_argument('configfile', metavar='outfile', nargs='?', type=argparse.FileType('w'), default=sys.stdout, help="config file to write (default : stdout)")
+        subcommand.set_defaults(func=self.handler.getServiceConfig)
+
+        # Get module list
+        subcommand = subparser.add_parser('list', help='display module list')
+        subcommand.add_argument('name', metavar='module', nargs='*', action='store', default=[], type=str, help="module name")
+        subcommand.set_defaults(func=self.handler.getModuleList)
+
+        # Create module template
+        subcommand = subparser.add_parser('create', help='create module template to local')
+        subcommand.add_argument('-d', '--dir', dest='target', action='store', type=str, default=os.getcwd(),
+                                help="directory to create")
+        subcommand.add_argument('-f', '--force', dest='force', action='store_true', help="create directory recursively")
+        subcommand.add_argument('name', metavar='module', action='store', type=str, help="module name")
+        subcommand.set_defaults(func=self.handler.createTemplate)
+
+        # Remove module from DB
+        subcommand = subparser.add_parser('remove', help='remove module')
+        subcommand.add_argument('name', metavar='module', type=str, help="module name")
+        subcommand.set_defaults(func=self.handler.removeModule)
+
+        # Upload module to DB
+        subcommand = subparser.add_parser('upload', help='upload module. if worker > 0 than, assign task to worker')
+        subcommand.add_argument('name', metavar='module', type=str, help="module name")
+        subcommand.add_argument('-d', '--dir', dest='target', action='store', type=str, default=os.getcwd(),
+                                help="parent directory of module. module path is [dir]/[module] (default is ./)")
+        subcommand.add_argument('-w', '--worker', dest='worker', type=int, action='store', default=-1,
+                                help="number of workers to assign")
+        subcommand.set_defaults(func=self.handler.uploadModule)
+
+        # Download module from DB
+        subcommand = subparser.add_parser('download', help='download module')
+        subcommand.add_argument('name', metavar='module', type=str, help="module name")
+        subcommand.add_argument('-d', '--dir', dest='target', action='store', type=str, default=os.getcwd(),
+                                help="module directory to download (default is ./[module])")
+        subcommand.add_argument('-x', '--extract', dest='extract', action='store_true', help="extract module")
+        subcommand.add_argument('-f', '--force', dest='force', action='store_true', help="create download directory")
+        subcommand.set_defaults(func=self.handler.downloadModule)
+
+        # Re-assign task (with assign number)
+        subcommand = subparser.add_parser('task', help='set number of worker to assign task')
+        subcommand.add_argument('name', metavar='task', type=str, help="task name")
+        subcommand.add_argument('-w', '--worker', dest='worker', type=int, action='store', default=0,
+                                help="number of workers to assign")
+        subcommand.set_defaults(func=self.handler.updateTaskConfig)
+
+        # Re-balance task
+        subcommand = subparser.add_parser('rebalance', help='re-assign task to worker')
+        subcommand.add_argument('tasks', nargs='+', type=str, help="task name. or 'all' for all task")
+        subcommand.set_defaults(func=self.handler.rebalanceTask)
+
+    def doParse(self):
+        args = self.parser.parse_args()
+        if hasattr(args, 'func'):
+            args.func(args)
+
+
+if __name__ == "__main__":
+    parser = OWCommandLineInterface()
+    try:
+        parser.doParse()
+    except Exception, e:
+        print e

@@ -1,0 +1,7 @@
+gevent
+kombu
+pymongo
+kazoo
+MySQL-python
+raven
+lockfile

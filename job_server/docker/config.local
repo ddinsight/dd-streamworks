@@ -1,0 +1,17 @@
+[main]
+bind = 0.0.0.0
+port = 7010
+environment = production
+pid-file = /tmp/henem.pid
+
+[source]
+mgqueue = mongodb://mongodb/apqueue
+
+[server]
+meta = zk://zookeeper:2181/ddinsight
+broker = amqp://demo:demo@rabbitmq/ddinsight
+
+[log]
+name = Henem
+level = INFO
+file = log/henem.log
