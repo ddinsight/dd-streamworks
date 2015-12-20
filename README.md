@@ -31,9 +31,6 @@ dd-streamworks is the stream data processing part of DD Insight. This sub-projec
 > - Jay Lee (Workers)
 > - [See contributors on Github](http://)
 
----------
-
-### 
 ## **License**
 > dd-streamworks is released under [Apache v2 License](http://)
 
