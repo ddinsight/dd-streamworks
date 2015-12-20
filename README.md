@@ -23,8 +23,6 @@ dd-streamworks is the stream data processing part of DD Insight. This sub-projec
 > For further information on how to use CLI for task module upload, delete, assignment of the number of workers on each task, check [Streamworks CLI User Guide]() document.
 
 
----------
-
 ### 
 ## **Authors & Contributors**
 > - Spring Choi (Job Server, Workers)
