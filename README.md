@@ -23,23 +23,24 @@ dd-streamworks is the stream data processing part of DD Insight. This sub-projec
 > For further information on how to use CLI for task module upload, delete, assignment of the number of workers on each task, check [Streamworks CLI User Guide]() document.
 
 
+---------
+
 ### 
-**Authors & Maintainers**
+## **Authors & Contributors**
 > - Spring Choi (Job Server, Workers)
 > - Jay Lee (Workers)
+> - [See contributors on Github](http://)
+
+---------
 
 ### 
-**Contributors**
-> [See contributors on Github](http://)
-
-### 
-**License**
+## **License**
 > dd-streamworks is released under [Apache v2 License](http://)
 
 
 ### 
 
-
+----------
 
 **[NOTE] Information Regarding Cell/Wi-Fi Location**
 The locations for cell/Wi-Fi stations that are used in the map-based analytics tools can be constructed as follows. Note that there are various ways to do this for both methods of offline update and stream update.
@@ -55,4 +56,4 @@ The locations for cell/Wi-Fi stations that are used in the map-based analytics t
 
 
 
-> Written with [StackEdit](https://stackedit.io/).
+Copyright 2015 AirPlug Inc.
