@@ -16,17 +16,33 @@ dd-streamworks is the stream data processing part of DD Insight. This sub-projec
 
 ### 
 **Getting Started**
-> run a docker script with the files in ['dd-streamworks/job_server/docker']() directory
+> Run a docker script with the files in ['dd-streamworks/job_server/docker']() directory
 
 ### 
 **Developers Guide**
 > For further information on how to use CLI for task module upload, delete, assignment of the number of workers on each task, check [Streamworks CLI User Guide](http://github.com/ddinsight/dd-streamworks) document.
 
+**Note**
+#### *Information Regarding Cell/Wi-Fi Location*
+The locations for cell/Wi-Fi stations that are used in the map-based analytics tools can be constructed as follows. Note that there are various ways to do this for both methods of offline update and stream update.
+> - [Offline] Import pre-built location databases
+>  * Network operator's own station databases
+>  * Open databases in the public domain (eg. opencellid.org) 
+> - [Stream] Compute from the data reported by mobile devices. 
+>  * WPS with CellID & BSSID
+>  * Simple approximation by moving-average with device location reported by Android
+> - [Offline/Stream] Utilize API services for geolocation 
+>  * Google geolocation API with CellID or BSSID from the information reported by the device
+> - etc.
 
+---
 ### 
-**Authors & Contributors**
+**Authors**
 > - Spring Choi (Job Server, Workers)
 > - Jay Lee (Workers)
+
+### 
+**Contributors**
 > - [See contributors on Github](http://)
 
 ### 
@@ -38,17 +54,6 @@ dd-streamworks is the stream data processing part of DD Insight. This sub-projec
 
 ----------
 
-**[NOTE] Information Regarding Cell/Wi-Fi Location**
-The locations for cell/Wi-Fi stations that are used in the map-based analytics tools can be constructed as follows. Note that there are various ways to do this for both methods of offline update and stream update.
-> - [Offline] Import pre-built location databases
->  * Network operator's own station databases
->  * Open databases in the public domain (eg. opencellid.org) 
-> - [Stream] Compute from the data reported by mobile devices. 
->  * WPS with CellID & BSSID
->  * Simple approximation by moving-average with device location reported by Android
-> - [Offline/Stream] Utilize API services for geolocation 
->  * Google geolocation API with CellID or BSSID from the information reported by the device
-> - etc.
 
 
 
