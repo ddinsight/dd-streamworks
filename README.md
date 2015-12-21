@@ -6,12 +6,12 @@ dd-streamworks
 dd-streamworks is the stream data processing part of DD Insight. This sub-project includes two main parts. One resides on the job_server directory including job server engine that is capable of  runtime task balancing and the other on the stream_worker directory including sample workers and modules that are needed for real-time analysis of DD Insight
 
 **Features**
-> - a server framework for real-time data processing
-> - ability to scale-out in runtime
-> - load distribution by runtime task balancing (with zero down-time)
-> - run time task deployment ( add / update / delete of a module )
-> - runtime reconfiguration ( interoperated with zookeeper )
-> - pub/sub-based messaging architecture and consistent-hashing supported
+> - A server framework for real-time data processing
+> - Ability to scale-out in runtime
+> - Load distribution by runtime task balancing (with zero down-time)
+> - Run time task deployment ( add / update / delete of a module )
+> - Runtime reconfiguration ( interoperated with zookeeper )
+> - Pub/sub-based messaging architecture and consistent-hashing supported
 
 
 ### 
@@ -53,8 +53,5 @@ The locations for cell/Wi-Fi stations that are used in the map-based analytics t
 ### 
 
 ----------
-
-
-
 
 Copyright 2015 AirPlug Inc.
