@@ -1,12 +1,12 @@
 
 
-## CLI TOOL
+## CLI TOOL for dd-streamworks
 
 The management of tasks in dd-streamworks is done through a CLI tool. The CLI tool has following features.
-- task module generation, deletion, upload and download
-- modification of task configuration
-- task reallocation on workers
-- service configuration of workers that are saved on zookeeper
+- Task module generation, deletion, upload and download
+- Modification of task configuration
+- Task reallocation on workers
+- Service configuration of workers that are saved on zookeeper
 
 ### Setup
 CLI tool is included in the distribution of stream_worker source code of dd-streamworks
@@ -101,3 +101,7 @@ ocadm setconfig <service name> <filename>
 
 Update the configuration data on zookeeper.
 The parameter is the same as `getconfig`.
+
+
+---
+Copyright 2015 AirPlug Inc.
