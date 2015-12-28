@@ -13,7 +13,7 @@ RUN apt-get install -y  git \
                         libmysqlclient-dev
 
 # Download & Install
-RUN git clone http://deploy:deploy0621@src.airplug.co.kr/opensource/dd-streamworks.git /opt/dd-streamworks \
+RUN git clone https://github.com/ddinsight/dd-streamworks /opt/dd-streamworks \
     && mkdir -p /opt/dd-streamworks/stream_worker/log \
     && pip install -r /opt/dd-streamworks/stream_worker/requirements.txt
 

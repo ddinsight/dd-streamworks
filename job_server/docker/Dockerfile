@@ -10,7 +10,7 @@ RUN apt-get install -y  git \
                         python-pip
 
 # Download & Install
-RUN git clone http://deploy:deploy0621@src.airplug.co.kr/opensource/dd-streamworks.git /opt/dd-streamworks \
+RUN git clone https://github.com/ddinsight/dd-streamworks /opt/dd-streamworks \
     && mkdir -p /opt/dd-streamworks/job_server/log \
     && pip install -r /opt/dd-streamworks/job_server/requirements.txt
 
